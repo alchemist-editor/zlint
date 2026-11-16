@@ -88,7 +88,11 @@ fn parse(alloc: Allocator, io: std.Io, args_iter: anytype, err: ?*Error) ParseEr
     while (argv.next()) |arg| {
         if (arg.len == 0) continue;
         if (arg[0] != '-') {
-            try opts.args.append(alloc, arg);
+            // Owned: on Windows and WASI the iterator's decoded command line
+            // is freed when `parseArgv` returns.
+            const owned = try alloc.dupe(u8, arg);
+            errdefer alloc.free(owned);
+            try opts.args.append(alloc, owned);
             continue;
         }
         if (eq(arg, "--fix")) {
@@ -141,7 +145,8 @@ fn parse(alloc: Allocator, io: std.Io, args_iter: anytype, err: ?*Error) ParseEr
                 }
                 return error.InvalidArgValue;
             }
-            opts.config = config;
+            if (opts.config) |old| alloc.free(old);
+            opts.config = try alloc.dupe(u8, config);
         } else if (eq(arg, "-h") or eq(arg, "--help") or eq(arg, "--hlep") or eq(arg, "-help")) {
             var buf: [512]u8 = undefined;
             var writer = std.Io.File.stdout().writer(io, &buf);
@@ -167,7 +172,10 @@ fn parse(alloc: Allocator, io: std.Io, args_iter: anytype, err: ?*Error) ParseEr
 }
 
 pub fn deinit(self: *Options, alloc: std.mem.Allocator) void {
+    for (self.args.items) |arg| alloc.free(arg);
     self.args.deinit(alloc);
+    if (self.config) |config| alloc.free(config);
+    self.config = null;
 }
 
 inline fn eq(arg: anytype, name: @TypeOf(arg)) bool {
